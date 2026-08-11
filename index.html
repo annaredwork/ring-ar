@@ -18,9 +18,9 @@
   #stage{
     position:fixed; inset:0; overflow:hidden; background:#000;
   }
-  /* mirror the whole camera+overlay so it behaves like a selfie camera */
+  /* camera + overlay wrapper — unmirrored, shows true camera orientation */
   #mirror{
-    position:absolute; inset:0; transform:scaleX(-1);
+    position:absolute; inset:0;
   }
   video{
     position:absolute; inset:0; width:100%; height:100%;
@@ -58,6 +58,22 @@
   }
   .hint.hidden{opacity:0;}
 
+  .size-control{
+    position:absolute; top:64px; right:16px; z-index:20;
+    display:flex; align-items:center; gap:8px;
+    background:rgba(0,0,0,.4); backdrop-filter:blur(6px);
+    border-radius:20px; padding:6px 10px;
+    color:#fff; font-size:12px;
+  }
+  .size-btn{
+    width:26px; height:26px; border-radius:50%; border:none;
+    background:rgba(255,255,255,.18); color:#fff; font-size:15px;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    line-height:1;
+  }
+  .size-btn:active{background:rgba(255,255,255,.32);}
+  .size-label{min-width:34px; text-align:center;}
+
   /* ---------- bottom chrome ---------- */
   .bottom-bar{
     position:absolute; left:0; right:0; bottom:0;
@@ -72,15 +88,16 @@
   .carousel::-webkit-scrollbar{display:none;}
   .ring-thumb{
     flex:0 0 auto; width:64px; height:64px; border-radius:50%;
-    background:radial-gradient(circle at 35% 30%, #2b2b2e, #0e0e10 70%);
-    border:2px solid rgba(255,255,255,.25);
+    background:radial-gradient(circle at 35% 30%, #ffffff, #dcdce4 75%);
+    border:2px solid rgba(255,255,255,.7);
+    box-shadow:0 4px 12px rgba(0,0,0,.35);
     display:flex; align-items:center; justify-content:center;
-    padding:8px; position:relative; transition:transform .15s ease, border-color .15s ease;
+    padding:10px; position:relative; transition:transform .15s ease, border-color .15s ease;
   }
-  .ring-thumb img{width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 2px 3px rgba(0,0,0,.6));}
+  .ring-thumb img{width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));}
   .ring-thumb.active{
-    border-color:#fff; transform:scale(1.08);
-    box-shadow:0 0 0 3px rgba(255,255,255,.15);
+    border-color:#3897f0; transform:scale(1.1);
+    box-shadow:0 4px 14px rgba(0,0,0,.4), 0 0 0 3px rgba(56,151,240,.35);
   }
   .ring-thumb .label{
     position:absolute; bottom:-18px; left:50%; transform:translateX(-50%);
@@ -168,6 +185,12 @@
 
   <div class="hint" id="hint">Покажите руку в кадр камеры ✋</div>
 
+  <div class="size-control" id="sizeControl">
+    <button class="size-btn" id="sizeMinus">－</button>
+    <span class="size-label" id="sizeLabel">100%</span>
+    <button class="size-btn" id="sizePlus">＋</button>
+  </div>
+
   <div class="bottom-bar">
     <div class="carousel" id="carousel"></div>
     <div class="controls-row">
@@ -226,10 +249,21 @@ const RINGS = [
     band: "assets/ring1_band.png",
     circle: "assets/ring1_circle.png",
     aspect: null,        // filled in at load time
-    widthFactor: 1.85,
-    vOffset: 0.08         // fraction of sprite height to nudge toward knuckle
+    widthFactor: 0.95,
+    vOffset: 0.35          // fraction along MCP→PIP vector, 0=knuckle, 1=next joint
   }
 ];
+
+/* per-ring user-adjustable scale multiplier (1 = default size).
+   Persisted per ring id so switching rings keeps each one's own size. */
+const userScales = {};
+const SCALE_MIN = 0.5, SCALE_MAX = 2.0, SCALE_STEP = 0.05;
+function getScale(id){ return userScales[id] ?? 1; }
+function setScale(id, v){ userScales[id] = Math.min(SCALE_MAX, Math.max(SCALE_MIN, v)); updateSizeLabel(); }
+function updateSizeLabel(){
+  const ring = RINGS[activeRingIndex];
+  if (sizeLabel) sizeLabel.textContent = Math.round(getScale(ring.id) * 100) + "%";
+}
 
 /* ---------------- state ---------------- */
 let activeRingIndex = 0;
@@ -256,6 +290,10 @@ const snapPreview = document.getElementById("snapPreview");
 const snapImg = document.getElementById("snapImg");
 const snapDownload = document.getElementById("snapDownload");
 const snapClose = document.getElementById("snapClose");
+const sizeMinus = document.getElementById("sizeMinus");
+const sizePlus = document.getElementById("sizePlus");
+const sizeLabel = document.getElementById("sizeLabel");
+const stageEl = document.getElementById("stage");
 
 /* ---------------- preload ring images ---------------- */
 function preloadRings(){
@@ -283,6 +321,7 @@ function buildCarousel(){
     el.addEventListener("click", () => {
       activeRingIndex = i;
       [...carousel.children].forEach((c, ci) => c.classList.toggle("active", ci === i));
+      updateSizeLabel();
     });
     carousel.appendChild(el);
   });
@@ -368,7 +407,7 @@ function drawRingOnHand(lm){
   const cy = mcp.y + (pip.y - mcp.y) * ring.vOffset;
 
   const phalanxLen = Math.hypot(pip.x - mcp.x, pip.y - mcp.y);
-  const spriteW = Math.max(phalanxLen * ring.widthFactor, 18);
+  const spriteW = Math.max(phalanxLen * ring.widthFactor * getScale(ring.id), 14);
   const spriteH = spriteW / ring.aspect;
 
   const fingerAngle = Math.atan2(pip.y - mcp.y, pip.x - mcp.x); // radians
@@ -393,9 +432,6 @@ function takeSnapshot(){
   out.width = canvas.width;
   out.height = canvas.height;
   const octx = out.getContext("2d");
-  // mirror to match what the user sees on screen
-  octx.translate(out.width, 0);
-  octx.scale(-1, 1);
   octx.drawImage(video, 0, 0, out.width, out.height);
   octx.drawImage(canvas, 0, 0, out.width, out.height);
 
@@ -417,6 +453,7 @@ startBtn.addEventListener("click", async () => {
     initHands();
     await preloadRings();
     buildCarousel();
+    updateSizeLabel();
     loadingScreen.style.display = "none";
     frameLoop();
   } catch (e) {
@@ -433,6 +470,38 @@ flipBtn.addEventListener("click", async () => {
   try { await startCamera(usingFrontCamera ? "user" : "environment"); }
   catch (e) { console.error(e); usingFrontCamera = !usingFrontCamera; }
 });
+
+sizeMinus.addEventListener("click", () => {
+  const ring = RINGS[activeRingIndex];
+  setScale(ring.id, getScale(ring.id) - SCALE_STEP);
+});
+sizePlus.addEventListener("click", () => {
+  const ring = RINGS[activeRingIndex];
+  setScale(ring.id, getScale(ring.id) + SCALE_STEP);
+});
+
+/* pinch-to-zoom on the camera stage (two-finger gesture) */
+let pinchStartDist = null;
+let pinchStartScale = 1;
+function touchDist(t0, t1){
+  return Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+}
+stageEl.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 2) {
+    pinchStartDist = touchDist(e.touches[0], e.touches[1]);
+    pinchStartScale = getScale(RINGS[activeRingIndex].id);
+  }
+}, { passive: true });
+stageEl.addEventListener("touchmove", (e) => {
+  if (e.touches.length === 2 && pinchStartDist) {
+    const d = touchDist(e.touches[0], e.touches[1]);
+    const ring = RINGS[activeRingIndex];
+    setScale(ring.id, pinchStartScale * (d / pinchStartDist));
+  }
+}, { passive: true });
+stageEl.addEventListener("touchend", (e) => {
+  if (e.touches.length < 2) pinchStartDist = null;
+}, { passive: true });
 
 shutterBtn.addEventListener("click", takeSnapshot);
 snapClose.addEventListener("click", () => snapPreview.classList.remove("show"));
