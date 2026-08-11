@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Ring AR — примерка колец</title>
+<style>
+  :root{
+    --ig-blue:#3897f0;
+    --bg:#000;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; height:100%; background:var(--bg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    overscroll-behavior:none; user-select:none;
+  }
+  #stage{
+    position:fixed; inset:0; overflow:hidden; background:#000;
+  }
+  /* mirror the whole camera+overlay so it behaves like a selfie camera */
+  #mirror{
+    position:absolute; inset:0; transform:scaleX(-1);
+  }
+  video{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:cover; background:#000;
+  }
+  canvas#overlay{
+    position:absolute; inset:0; width:100%; height:100%;
+  }
+
+  /* ---------- top chrome ---------- */
+  .top-bar{
+    position:absolute; top:0; left:0; right:0;
+    padding:calc(env(safe-area-inset-top,0px) + 14px) 16px 10px;
+    display:flex; align-items:center; justify-content:space-between;
+    z-index:20; pointer-events:none;
+  }
+  .top-bar .brand{
+    color:#fff; font-weight:600; font-size:16px;
+    text-shadow:0 1px 6px rgba(0,0,0,.5);
+    letter-spacing:.2px;
+  }
+  .top-bar .dot{
+    width:8px;height:8px;border-radius:50%;background:#ff4040;
+    display:inline-block; margin-right:8px; box-shadow:0 0 8px #ff4040;
+    animation:pulse 1.4s infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  .hint{
+    position:absolute; top:64px; left:50%; transform:translateX(-50%);
+    color:#fff; background:rgba(0,0,0,.35); backdrop-filter:blur(6px);
+    padding:8px 16px; border-radius:20px; font-size:13px; z-index:20;
+    transition:opacity .4s ease; pointer-events:none; text-align:center;
+    max-width:80%;
+  }
+  .hint.hidden{opacity:0;}
+
+  /* ---------- bottom chrome ---------- */
+  .bottom-bar{
+    position:absolute; left:0; right:0; bottom:0;
+    padding:14px 0 calc(env(safe-area-inset-bottom,0px) + 18px);
+    background:linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0));
+    z-index:20;
+  }
+  .carousel{
+    display:flex; gap:14px; padding:0 16px 16px; overflow-x:auto;
+    scrollbar-width:none;
+  }
+  .carousel::-webkit-scrollbar{display:none;}
+  .ring-thumb{
+    flex:0 0 auto; width:64px; height:64px; border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #2b2b2e, #0e0e10 70%);
+    border:2px solid rgba(255,255,255,.25);
+    display:flex; align-items:center; justify-content:center;
+    padding:8px; position:relative; transition:transform .15s ease, border-color .15s ease;
+  }
+  .ring-thumb img{width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 2px 3px rgba(0,0,0,.6));}
+  .ring-thumb.active{
+    border-color:#fff; transform:scale(1.08);
+    box-shadow:0 0 0 3px rgba(255,255,255,.15);
+  }
+  .ring-thumb .label{
+    position:absolute; bottom:-18px; left:50%; transform:translateX(-50%);
+    font-size:10px; color:#fff; white-space:nowrap; opacity:.85;
+  }
+
+  .controls-row{
+    display:flex; align-items:center; justify-content:center; gap:36px;
+    padding-top:4px;
+  }
+  .shutter{
+    width:70px; height:70px; border-radius:50%;
+    background:rgba(255,255,255,.15); border:3px solid #fff;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+  }
+  .shutter .inner{
+    width:56px; height:56px; border-radius:50%; background:#fff;
+    transition:transform .12s ease;
+  }
+  .shutter:active .inner{transform:scale(.85);}
+  .icon-btn{
+    width:44px; height:44px; border-radius:50%;
+    background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.25);
+    display:flex; align-items:center; justify-content:center; color:#fff; font-size:18px;
+    cursor:pointer;
+  }
+
+  /* ---------- overlay screens ---------- */
+  .screen{
+    position:absolute; inset:0; z-index:50;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; padding:32px; color:#fff;
+    background:radial-gradient(circle at 50% 30%, #1c1c22, #000 75%);
+  }
+  .screen h1{font-size:22px; margin:18px 0 8px; font-weight:600;}
+  .screen p{font-size:14px; color:#c9c9cf; line-height:1.5; max-width:320px; margin:0 0 22px;}
+  .ring-icon{width:88px;height:88px; border-radius:26px; background:#111; display:flex;align-items:center;justify-content:center; box-shadow:0 8px 30px rgba(0,0,0,.5);}
+  .ring-icon img{width:70%;}
+  .btn{
+    background:#fff; color:#000; border:none; border-radius:24px;
+    padding:13px 28px; font-size:15px; font-weight:600; cursor:pointer;
+  }
+  .btn:active{opacity:.8;}
+  .err{color:#ff6b6b; font-size:13px; margin-top:14px; max-width:300px;}
+  .spinner{
+    width:34px;height:34px;border-radius:50%;
+    border:3px solid rgba(255,255,255,.25); border-top-color:#fff;
+    animation:spin 1s linear infinite; margin-bottom:16px;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .flash{
+    position:fixed; inset:0; background:#fff; z-index:80; opacity:0;
+    pointer-events:none;
+  }
+  .flash.go{animation:flash .35s ease;}
+  @keyframes flash{0%{opacity:.85}100%{opacity:0}}
+
+  .snapshot-preview{
+    position:fixed; inset:0; z-index:90; background:#000;
+    display:none; flex-direction:column;
+  }
+  .snapshot-preview.show{display:flex;}
+  .snapshot-preview img{flex:1; width:100%; object-fit:contain;}
+  .snapshot-actions{
+    display:flex; gap:14px; justify-content:center;
+    padding:16px 16px calc(env(safe-area-inset-bottom,0px) + 20px);
+  }
+  .snapshot-actions .btn.secondary{background:rgba(255,255,255,.12); color:#fff; border:1px solid rgba(255,255,255,.3);}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="mirror">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div class="top-bar">
+    <div class="brand"><span class="dot"></span>Ring&nbsp;AR</div>
+    <div style="width:1px"></div>
+  </div>
+
+  <div class="hint" id="hint">Покажите руку в кадр камеры ✋</div>
+
+  <div class="bottom-bar">
+    <div class="carousel" id="carousel"></div>
+    <div class="controls-row">
+      <div class="icon-btn" id="flipBtn" title="Сменить камеру">⟳</div>
+      <div class="shutter" id="shutterBtn"><div class="inner"></div></div>
+      <div class="icon-btn" id="infoBtn" title="Информация">i</div>
+    </div>
+  </div>
+</div>
+
+<!-- start / permission screen -->
+<div class="screen" id="startScreen">
+  <div class="ring-icon"><img src="assets/ring1_circle.png" alt="ring" /></div>
+  <h1>AR-примерка колец</h1>
+  <p>Разрешите доступ к камере — кольцо наденется на средний палец в реальном времени, как в фильтрах Instagram.</p>
+  <button class="btn" id="startBtn">Включить камеру</button>
+  <div class="err" id="startErr"></div>
+</div>
+
+<!-- loading screen -->
+<div class="screen" id="loadingScreen" style="display:none;">
+  <div class="spinner"></div>
+  <p>Загружаем модель распознавания руки…</p>
+</div>
+
+<div class="flash" id="flash"></div>
+
+<div class="snapshot-preview" id="snapPreview">
+  <img id="snapImg" alt="snapshot" />
+  <div class="snapshot-actions">
+    <button class="btn secondary" id="snapClose">Закрыть</button>
+    <a class="btn" id="snapDownload" download="ring-ar.png">Сохранить</a>
+  </div>
+</div>
+
+<!-- MediaPipe Hands (CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
+
+<script>
+/* ============================================================
+   RING CONFIG — add more rings here as new photo sets arrive.
+   "band"   -> horizontal strip render, used as the AR sprite
+               that wraps across the finger.
+   "circle" -> top-down circle render, used for the carousel
+               thumbnail / start-screen icon.
+   aspect   -> band image aspect ratio (w/h), precomputed so we
+               don't need to wait on image.naturalWidth on first frame.
+   widthFactor -> sprite width as a multiple of the proximal
+               phalanx length (landmark 9→10 distance). Tune per ring.
+   ============================================================ */
+const RINGS = [
+  {
+    id: "ring1",
+    name: "Baguette Band",
+    band: "assets/ring1_band.png",
+    circle: "assets/ring1_circle.png",
+    aspect: null,        // filled in at load time
+    widthFactor: 1.85,
+    vOffset: 0.08         // fraction of sprite height to nudge toward knuckle
+  }
+];
+
+/* ---------------- state ---------------- */
+let activeRingIndex = 0;
+const ringImages = {}; // id -> {band:Image, circle:Image}
+let stream = null;
+let usingFrontCamera = true;
+let handDetected = false;
+let lastResults = null;
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("overlay");
+const ctx = canvas.getContext("2d");
+const hint = document.getElementById("hint");
+const startScreen = document.getElementById("startScreen");
+const loadingScreen = document.getElementById("loadingScreen");
+const startBtn = document.getElementById("startBtn");
+const startErr = document.getElementById("startErr");
+const carousel = document.getElementById("carousel");
+const flipBtn = document.getElementById("flipBtn");
+const shutterBtn = document.getElementById("shutterBtn");
+const infoBtn = document.getElementById("infoBtn");
+const flashEl = document.getElementById("flash");
+const snapPreview = document.getElementById("snapPreview");
+const snapImg = document.getElementById("snapImg");
+const snapDownload = document.getElementById("snapDownload");
+const snapClose = document.getElementById("snapClose");
+
+/* ---------------- preload ring images ---------------- */
+function preloadRings(){
+  return Promise.all(RINGS.map(r => new Promise((resolve) => {
+    const bandImg = new Image();
+    const circleImg = new Image();
+    let done = 0;
+    const check = () => { done++; if (done === 2) resolve(); };
+    bandImg.onload = () => { r.aspect = bandImg.naturalWidth / bandImg.naturalHeight; check(); };
+    bandImg.onerror = check;
+    circleImg.onerror = check;
+    circleImg.onload = check;
+    bandImg.src = r.band;
+    circleImg.src = r.circle;
+    ringImages[r.id] = { band: bandImg, circle: circleImg };
+  })));
+}
+
+function buildCarousel(){
+  carousel.innerHTML = "";
+  RINGS.forEach((r, i) => {
+    const el = document.createElement("div");
+    el.className = "ring-thumb" + (i === activeRingIndex ? " active" : "");
+    el.innerHTML = `<img src="${r.circle}" alt="${r.name}"><span class="label">${r.name}</span>`;
+    el.addEventListener("click", () => {
+      activeRingIndex = i;
+      [...carousel.children].forEach((c, ci) => c.classList.toggle("active", ci === i));
+    });
+    carousel.appendChild(el);
+  });
+}
+
+/* ---------------- camera + canvas sizing ---------------- */
+function resizeCanvas(){
+  canvas.width = video.videoWidth || window.innerWidth;
+  canvas.height = video.videoHeight || window.innerHeight;
+}
+window.addEventListener("resize", resizeCanvas);
+
+async function startCamera(facing = "user"){
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false
+  });
+  video.srcObject = stream;
+  await video.play();
+  resizeCanvas();
+}
+
+/* ---------------- MediaPipe Hands ---------------- */
+let hands;
+function initHands(){
+  hands = new Hands({
+    locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${f}`
+  });
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.6
+  });
+  hands.onResults(onResults);
+}
+
+let rafId = null;
+async function frameLoop(){
+  if (video.readyState >= 2) {
+    await hands.send({ image: video });
+  }
+  rafId = requestAnimationFrame(frameLoop);
+}
+
+function onResults(results){
+  lastResults = results;
+  draw();
+}
+
+/* ---------------- drawing the ring on the finger ---------------- */
+function draw(){
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const results = lastResults;
+  const hasHand = results && results.multiHandLandmarks && results.multiHandLandmarks.length > 0;
+
+  if (hasHand) {
+    if (!handDetected) {
+      handDetected = true;
+      hint.classList.add("hidden");
+    }
+    results.multiHandLandmarks.forEach(lm => drawRingOnHand(lm));
+  } else if (handDetected) {
+    // keep hint hidden once user has seen it work; do nothing
+  }
+}
+
+function drawRingOnHand(lm){
+  const ring = RINGS[activeRingIndex];
+  const imgs = ringImages[ring.id];
+  if (!imgs || !imgs.band.complete || !ring.aspect) return;
+
+  const W = canvas.width, H = canvas.height;
+  const p = (i) => ({ x: lm[i].x * W, y: lm[i].y * H });
+
+  const mcp = p(9);   // middle finger MCP (knuckle)
+  const pip = p(10);  // middle finger PIP joint
+
+  // anchor point: sits mostly at the base of the proximal phalanx,
+  // nudged slightly toward the knuckle so it reads as "worn" rather than floating
+  const cx = mcp.x + (pip.x - mcp.x) * ring.vOffset;
+  const cy = mcp.y + (pip.y - mcp.y) * ring.vOffset;
+
+  const phalanxLen = Math.hypot(pip.x - mcp.x, pip.y - mcp.y);
+  const spriteW = Math.max(phalanxLen * ring.widthFactor, 18);
+  const spriteH = spriteW / ring.aspect;
+
+  const fingerAngle = Math.atan2(pip.y - mcp.y, pip.x - mcp.x); // radians
+  const rotation = fingerAngle - Math.PI / 2; // sprite default orientation = finger pointing down
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+  // subtle shadow to help it sit visually on the finger
+  ctx.shadowColor = "rgba(0,0,0,0.35)";
+  ctx.shadowBlur = spriteW * 0.06;
+  ctx.shadowOffsetY = spriteW * 0.03;
+  ctx.drawImage(imgs.band, -spriteW / 2, -spriteH / 2, spriteW, spriteH);
+  ctx.restore();
+}
+
+/* ---------------- snapshot ---------------- */
+function takeSnapshot(){
+  flashEl.classList.remove("go"); void flashEl.offsetWidth; flashEl.classList.add("go");
+
+  const out = document.createElement("canvas");
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const octx = out.getContext("2d");
+  // mirror to match what the user sees on screen
+  octx.translate(out.width, 0);
+  octx.scale(-1, 1);
+  octx.drawImage(video, 0, 0, out.width, out.height);
+  octx.drawImage(canvas, 0, 0, out.width, out.height);
+
+  const url = out.toDataURL("image/png");
+  snapImg.src = url;
+  snapDownload.href = url;
+  snapPreview.classList.add("show");
+}
+
+/* ---------------- wiring ---------------- */
+startBtn.addEventListener("click", async () => {
+  startErr.textContent = "";
+  startBtn.disabled = true;
+  startBtn.textContent = "Запрашиваем доступ…";
+  try {
+    await startCamera(usingFrontCamera ? "user" : "environment");
+    startScreen.style.display = "none";
+    loadingScreen.style.display = "flex";
+    initHands();
+    await preloadRings();
+    buildCarousel();
+    loadingScreen.style.display = "none";
+    frameLoop();
+  } catch (e) {
+    console.error(e);
+    startBtn.disabled = false;
+    startBtn.textContent = "Включить камеру";
+    startErr.textContent = "Не удалось получить доступ к камере: " + (e.message || e.name || "unknown error") +
+      ". Проверьте разрешения браузера и что страница открыта через https:// или localhost.";
+  }
+});
+
+flipBtn.addEventListener("click", async () => {
+  usingFrontCamera = !usingFrontCamera;
+  try { await startCamera(usingFrontCamera ? "user" : "environment"); }
+  catch (e) { console.error(e); usingFrontCamera = !usingFrontCamera; }
+});
+
+shutterBtn.addEventListener("click", takeSnapshot);
+snapClose.addEventListener("click", () => snapPreview.classList.remove("show"));
+infoBtn.addEventListener("click", () => {
+  alert("Демо AR-примерки колец.\nОтслеживание руки: MediaPipe Hands.\nКольцо крепится к среднему пальцу и вращается вместе с ним.");
+});
+</script>
+</body>
+</html>
