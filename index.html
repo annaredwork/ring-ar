@@ -184,6 +184,7 @@
   </div>
 
   <div class="hint" id="hint">Покажите руку в кадр камеры ✋</div>
+  <div class="hint hidden" id="moveHint" style="top:auto; bottom:132px;">Перетащите кольцо пальцем, чтобы сдвинуть</div>
 
   <div class="size-control" id="sizeControl">
     <button class="size-btn" id="sizeMinus">－</button>
@@ -249,7 +250,7 @@ const RINGS = [
     band: "assets/ring1_band.png",
     circle: "assets/ring1_circle.png",
     aspect: null,        // filled in at load time
-    widthFactor: 0.95,
+    widthFactor: 0.7,
     vOffset: 0.35          // fraction along MCP→PIP vector, 0=knuckle, 1=next joint
   }
 ];
@@ -257,13 +258,19 @@ const RINGS = [
 /* per-ring user-adjustable scale multiplier (1 = default size).
    Persisted per ring id so switching rings keeps each one's own size. */
 const userScales = {};
-const SCALE_MIN = 0.5, SCALE_MAX = 2.0, SCALE_STEP = 0.05;
+const SCALE_MIN = 0.3, SCALE_MAX = 2.0, SCALE_STEP = 0.05;
 function getScale(id){ return userScales[id] ?? 1; }
 function setScale(id, v){ userScales[id] = Math.min(SCALE_MAX, Math.max(SCALE_MIN, v)); updateSizeLabel(); }
 function updateSizeLabel(){
   const ring = RINGS[activeRingIndex];
   if (sizeLabel) sizeLabel.textContent = Math.round(getScale(ring.id) * 100) + "%";
 }
+
+/* per-ring user-adjustable position offset (canvas px), lets the
+   wearer nudge the ring if hand tracking places it a bit off. */
+const userOffsets = {};
+function getOffset(id){ return userOffsets[id] || (userOffsets[id] = { x: 0, y: 0 }); }
+function setOffset(id, x, y){ const o = getOffset(id); o.x = x; o.y = y; }
 
 /* ---------------- state ---------------- */
 let activeRingIndex = 0;
@@ -277,6 +284,7 @@ const video = document.getElementById("video");
 const canvas = document.getElementById("overlay");
 const ctx = canvas.getContext("2d");
 const hint = document.getElementById("hint");
+const moveHint = document.getElementById("moveHint");
 const startScreen = document.getElementById("startScreen");
 const loadingScreen = document.getElementById("loadingScreen");
 const startBtn = document.getElementById("startBtn");
@@ -294,6 +302,7 @@ const sizeMinus = document.getElementById("sizeMinus");
 const sizePlus = document.getElementById("sizePlus");
 const sizeLabel = document.getElementById("sizeLabel");
 const stageEl = document.getElementById("stage");
+const mirrorEl = document.getElementById("mirror");
 
 /* ---------------- preload ring images ---------------- */
 function preloadRings(){
@@ -383,6 +392,8 @@ function draw(){
     if (!handDetected) {
       handDetected = true;
       hint.classList.add("hidden");
+      moveHint.classList.remove("hidden");
+      setTimeout(() => moveHint.classList.add("hidden"), 3500);
     }
     results.multiHandLandmarks.forEach(lm => drawRingOnHand(lm));
   } else if (handDetected) {
@@ -403,8 +414,9 @@ function drawRingOnHand(lm){
 
   // anchor point: sits mostly at the base of the proximal phalanx,
   // nudged slightly toward the knuckle so it reads as "worn" rather than floating
-  const cx = mcp.x + (pip.x - mcp.x) * ring.vOffset;
-  const cy = mcp.y + (pip.y - mcp.y) * ring.vOffset;
+  const off = getOffset(ring.id);
+  const cx = mcp.x + (pip.x - mcp.x) * ring.vOffset + off.x;
+  const cy = mcp.y + (pip.y - mcp.y) * ring.vOffset + off.y;
 
   const phalanxLen = Math.hypot(pip.x - mcp.x, pip.y - mcp.y);
   const spriteW = Math.max(phalanxLen * ring.widthFactor * getScale(ring.id), 14);
@@ -502,6 +514,46 @@ stageEl.addEventListener("touchmove", (e) => {
 stageEl.addEventListener("touchend", (e) => {
   if (e.touches.length < 2) pinchStartDist = null;
 }, { passive: true });
+
+/* drag-to-reposition: single finger/mouse drag on the camera view
+   nudges the ring if hand tracking doesn't place it quite right. */
+let dragActive = false;
+let dragStart = null;
+let dragStartOffset = null;
+function canvasScale(){
+  const rect = canvas.getBoundingClientRect();
+  return { sx: canvas.width / rect.width, sy: canvas.height / rect.height };
+}
+function startDrag(x, y){
+  dragActive = true;
+  dragStart = { x, y };
+  dragStartOffset = { ...getOffset(RINGS[activeRingIndex].id) };
+  moveHint.classList.add("hidden");
+}
+function moveDrag(x, y){
+  if (!dragActive) return;
+  const { sx, sy } = canvasScale();
+  const ring = RINGS[activeRingIndex];
+  setOffset(ring.id, dragStartOffset.x + (x - dragStart.x) * sx, dragStartOffset.y + (y - dragStart.y) * sy);
+}
+function stopDrag(){ dragActive = false; }
+
+mirrorEl.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 1) startDrag(e.touches[0].clientX, e.touches[0].clientY);
+  else dragActive = false;
+}, { passive: true });
+mirrorEl.addEventListener("touchmove", (e) => {
+  if (e.touches.length === 1) moveDrag(e.touches[0].clientX, e.touches[0].clientY);
+}, { passive: true });
+mirrorEl.addEventListener("touchend", (e) => {
+  if (e.touches.length === 1) startDrag(e.touches[0].clientX, e.touches[0].clientY);
+  else if (e.touches.length === 0) stopDrag();
+}, { passive: true });
+mirrorEl.addEventListener("touchcancel", stopDrag, { passive: true });
+
+mirrorEl.addEventListener("mousedown", (e) => startDrag(e.clientX, e.clientY));
+window.addEventListener("mousemove", (e) => moveDrag(e.clientX, e.clientY));
+window.addEventListener("mouseup", stopDrag);
 
 shutterBtn.addEventListener("click", takeSnapshot);
 snapClose.addEventListener("click", () => snapPreview.classList.remove("show"));
