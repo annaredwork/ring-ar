@@ -82,17 +82,21 @@
     z-index:20;
   }
   .carousel{
-    display:flex; gap:14px; padding:0 16px 16px; overflow-x:auto;
+    display:flex; gap:14px; padding:0 16px 34px; overflow-x:auto;
     scrollbar-width:none;
   }
   .carousel::-webkit-scrollbar{display:none;}
   .ring-thumb{
     flex:0 0 auto; width:64px; height:64px; border-radius:50%;
-    background:radial-gradient(circle at 35% 30%, #3a3a42, #16161a 80%);
     border:2px solid rgba(255,255,255,.35);
     box-shadow:0 4px 12px rgba(0,0,0,.35);
+    position:relative; transition:transform .15s ease, border-color .15s ease;
+  }
+  .ring-thumb-img{
+    width:100%; height:100%; border-radius:50%; overflow:hidden;
+    background:radial-gradient(circle at 35% 30%, #3a3a42, #16161a 80%);
     display:flex; align-items:center; justify-content:center;
-    padding:8px; position:relative; transition:transform .15s ease, border-color .15s ease;
+    padding:8px;
   }
   .ring-thumb img{width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 1px 3px rgba(0,0,0,.6));}
   .ring-thumb.active{
@@ -326,7 +330,7 @@ function buildCarousel(){
   RINGS.forEach((r, i) => {
     const el = document.createElement("div");
     el.className = "ring-thumb" + (i === activeRingIndex ? " active" : "");
-    el.innerHTML = `<img src="${r.circle}" alt="${r.name}"><span class="label">${r.name}</span>`;
+    el.innerHTML = `<span class="ring-thumb-img"><img src="${r.circle}" alt="${r.name}"></span><span class="label">${r.name}</span>`;
     el.addEventListener("click", () => {
       activeRingIndex = i;
       [...carousel.children].forEach((c, ci) => c.classList.toggle("active", ci === i));
